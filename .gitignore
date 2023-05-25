@@ -80,3 +80,4 @@ libCEED.creator.*
 libCEED.cxxflags
 libCEED.files
 libCEED.includes
+env.sh
