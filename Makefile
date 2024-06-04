@@ -28,6 +28,9 @@ endif
 ifeq (,$(filter-out undefined default,$(origin ARFLAGS)))
   ARFLAGS = crD
 endif
+# Often /opt/rocm, but sometimes present on machines that don't support HIP
+ROCM_DIR ?= ${HIP_DIR}
+HIP_ARCH ?=
 NVCC ?= $(CUDA_DIR)/bin/nvcc
 NVCC_CXX ?= $(CXX)
 HIPCC ?= $(ROCM_DIR)/bin/hipcc
@@ -37,6 +40,17 @@ ifneq ($(EMSCRIPTEN),)
   STATIC = 1
   EXE_SUFFIX = .wasm
   EM_LDFLAGS = -s TOTAL_MEMORY=256MB
+endif
+
+HIP_CONFIG_RES := $(shell $(ROCM_DIR)/bin/hipconfig)
+ifneq (,$(findstring __HIP_PLATFORM_SPIRV__,$(HIP_CONFIG_RES)))
+  HIP_LIB_NAME = CHIP
+else ifneq (,$(findstring __HIP_PLATFORM_HCC__,$(HIP_CONFIG_RES)))
+  HIP_LIB_NAME = amdhip64
+else ifneq (,$(findstring __HIP_PLATFORM_AMD__,$(HIP_CONFIG_RES)))
+  HIP_LIB_NAME = amdhip64
+else 
+  $(error "HIP platform not supported")
 endif
 
 # ASAN must be left empty if you don't want to use it
@@ -88,9 +102,6 @@ MAGMA_DIR ?= ../magma
 CUDA_DIR  ?=
 CUDA_ARCH ?=
 
-# Often /opt/rocm, but sometimes present on machines that don't support HIP
-ROCM_DIR ?=
-HIP_ARCH ?=
 
 # Check for PETSc in ../petsc
 ifneq ($(wildcard ../petsc/lib/libpetsc.*),)
@@ -459,16 +470,16 @@ ifneq ($(CUDA_LIB_DIR),)
 endif
 
 # HIP Backends
-HIP_LIB_DIR := $(wildcard $(foreach d,lib lib64,$(ROCM_DIR)/$d/libamdhip64.${SO_EXT}))
+HIP_LIB_DIR := $(wildcard $(foreach d,lib lib64,$(ROCM_DIR)/$d/lib${HIP_LIB_NAME}.${SO_EXT}))
 HIP_LIB_DIR := $(patsubst %/,%,$(dir $(firstword $(HIP_LIB_DIR))))
 HIP_BACKENDS = /gpu/hip/ref /gpu/hip/shared /gpu/hip/gen
 ifneq ($(HIP_LIB_DIR),)
-  HIPCONFIG_CPPFLAGS := $(subst =,,$(shell $(ROCM_DIR)/bin/hipconfig -C))
+  HIPCONFIG_CPPFLAGS := $(shell $(ROCM_DIR)/bin/hipconfig -C)
   $(hip-all.c:%.c=$(OBJDIR)/%.o) $(hip-all.c:%=%.tidy): CPPFLAGS += $(HIPCONFIG_CPPFLAGS)
   ifneq ($(CXX), $(HIPCC))
     $(hip-all.cpp:%.cpp=$(OBJDIR)/%.o) $(hip-all.cpp:%=%.tidy): CPPFLAGS += $(HIPCONFIG_CPPFLAGS)
   endif
-  PKG_LIBS += -L$(abspath $(HIP_LIB_DIR)) -lamdhip64 -lhipblas
+  PKG_LIBS += -L$(abspath $(HIP_LIB_DIR)) -l${HIP_LIB_NAME} -lhipblas
   LIBCEED_CONTAINS_CXX = 1
   libceed.c     += $(hip-all.c)
   libceed.cpp   += $(hip-all.cpp)

@@ -355,7 +355,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
   }
   code << "\n  // -- Element loop --\n";
   code << "  __syncthreads();\n";
-  code << "  for (CeedInt elem = blockIdx.x*blockDim.z + threadIdx.z; elem < num_elem; elem += gridDim.x*blockDim.z) {\n";
+  code << "  CeedInt elem = blockIdx.x*blockDim.z + threadIdx.z;\n";
   // Input basis apply if needed
   // Generate the correct eval mode code for each input
   code << "    // -- Input field restrictions and basis actions --\n";
@@ -382,7 +382,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
         code << "    // CompStride: " << comp_stride << "\n";
         CeedCallBackend(CeedElemRestrictionGetData(elem_rstr, &rstr_data));
         data->indices.inputs[i] = (CeedInt *)rstr_data->d_offsets;
-        code << "    readDofsOffset" << dim << "d<num_comp_in_" << i << ", " << comp_stride << ", P_in_" << i << ">(data, l_size_in_" << i
+        code << "if (elem < num_elem)  readDofsOffset" << dim << "d<num_comp_in_" << i << ", " << comp_stride << ", P_in_" << i << ">(data, l_size_in_" << i
              << ", elem, indices.inputs[" << i << "], d_u_" << i << ", r_u_" << i << ");\n";
       } else {
         bool    has_backend_strides;
@@ -396,7 +396,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
           CeedCallBackend(CeedElemRestrictionGetStrides(elem_rstr, strides));
         }
         code << "    // Strides: {" << strides[0] << ", " << strides[1] << ", " << strides[2] << "}\n";
-        code << "    readDofsStrided" << dim << "d<num_comp_in_" << i << ",P_in_" << i << "," << strides[0] << "," << strides[1] << "," << strides[2]
+        code << "if (elem < num_elem) readDofsStrided" << dim << "d<num_comp_in_" << i << ",P_in_" << i << "," << strides[0] << "," << strides[1] << "," << strides[2]
              << ">(data, elem, d_u_" << i << ", r_u_" << i << ");\n";
       }
     }
@@ -469,7 +469,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
   // We treat quadrature points per slice in 3d to save registers
   if (use_collograd_parallelization) {
     code << "\n    // Note: Using planes of 3D elements\n";
-    code << "#pragma unroll\n";
+//    code << "#pragma unroll\n";
     code << "    for (CeedInt q = 0; q < Q_1d; q++) {\n";
     code << "      // -- Input fields --\n";
     for (CeedInt i = 0; i < num_input_fields; i++) {
@@ -495,7 +495,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
             code << "      // CompStride: " << comp_stride << "\n";
             CeedCallBackend(CeedElemRestrictionGetData(elem_rstr, &rstr_data));
             data->indices.inputs[i] = (CeedInt *)rstr_data->d_offsets;
-            code << "      readSliceQuadsOffset"
+            code << "if (elem < num_elem) readSliceQuadsOffset"
                  << "3d<num_comp_in_" << i << ", " << comp_stride << ", Q_1d>(data, l_size_in_" << i << ", elem, q, indices.inputs[" << i << "], d_u_"
                  << i << ", r_q_" << i << ");\n";
           } else {
@@ -511,7 +511,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
               CeedCallBackend(CeedElemRestrictionGetStrides(elem_rstr, strides));
             }
             code << "      // Strides: {" << strides[0] << ", " << strides[1] << ", " << strides[2] << "}\n";
-            code << "      readSliceQuadsStrided"
+            code << "if (elem < num_elem) readSliceQuadsStrided"
                  << "3d<num_comp_in_" << i
                  << ",Q_1d"
                     ","
@@ -586,13 +586,15 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
     code << "      out[" << i << "] = r_qq_" << i << ";\n";
   }
   code << "\n      // -- Apply QFunction --\n";
-  code << "      " << qfunction_name << "(ctx, ";
+  code << "      if (data.t_id_x < Q_1d && data.t_id_y < Q_1d) {\n";
+  code << "        " << qfunction_name << "(ctx, ";
   if (dim != 3 || use_collograd_parallelization) {
     code << "1";
   } else {
     code << "Q_1d";
   }
   code << ", in, out);\n";
+  code << "      }\n";
   if (use_collograd_parallelization) {
     code << "      // -- Output fields --\n";
     for (CeedInt i = 0; i < num_output_fields; i++) {
@@ -686,7 +688,7 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
       code << "    // CompStride: " << comp_stride << "\n";
       CeedCallBackend(CeedElemRestrictionGetData(elem_rstr, &rstr_data));
       data->indices.outputs[i] = (CeedInt *)rstr_data->d_offsets;
-      code << "    writeDofsOffset" << dim << "d<num_comp_out_" << i << ", " << comp_stride << ", P_out_" << i << ">(data, l_size_out_" << i
+      code << "if (elem < num_elem) writeDofsOffset" << dim << "d<num_comp_out_" << i << ", " << comp_stride << ", P_out_" << i << ">(data, l_size_out_" << i
            << ", elem, indices.outputs[" << i << "], r_v_" << i << ", d_v_" << i << ");\n";
     } else {
       bool    has_backend_strides;
@@ -700,12 +702,11 @@ extern "C" int CeedOperatorBuildKernel_Hip_gen(CeedOperator op) {
         CeedCallBackend(CeedElemRestrictionGetStrides(elem_rstr, strides));
       }
       code << "    // Strides: {" << strides[0] << ", " << strides[1] << ", " << strides[2] << "}\n";
-      code << "    writeDofsStrided" << dim << "d<num_comp_out_" << i << ",P_out_" << i << "," << strides[0] << "," << strides[1] << "," << strides[2]
+      code << "if (elem < num_elem) writeDofsStrided" << dim << "d<num_comp_out_" << i << ",P_out_" << i << "," << strides[0] << "," << strides[1] << "," << strides[2]
            << ">(data, elem, r_v_" << i << ", d_v_" << i << ");\n";
     }
   }
 
-  code << "  }\n";
   code << "}\n";
   code << "// -----------------------------------------------------------------------------\n\n";
 
